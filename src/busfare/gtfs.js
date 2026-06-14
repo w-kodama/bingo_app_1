@@ -116,6 +116,38 @@ export function parseGtfsTables(tables) {
     containsId: r.contains_id || '',
   }));
 
+  // 運賃の索引化。西武バス等の区間制は fare_rules が10万行を超えるため、
+  // 起動時に「乗車区間→降車区間」の最安運賃を Map 化し、検索を O(1) にする。
+  //   fareIndex: `${originId}|${destId}` → 最安 price
+  //   flatFare : origin/destination 指定なしの均一運賃
+  //   partialRules: origin か destination の一方のみ指定された稀なルール（フォールバック走査用）
+  const fareIndex = new Map();
+  const partialRules = [];
+  let flatFare = null;
+  for (const rule of fareRules) {
+    const attr = fareAttributes[rule.fareId];
+    if (!attr || !Number.isFinite(attr.price)) continue;
+    const hasO = !!rule.originId;
+    const hasD = !!rule.destinationId;
+    if (rule.containsId) {
+      partialRules.push(rule); // contains_id 方式は別途フォールバックで扱う
+    } else if (hasO && hasD) {
+      const key = `${rule.originId}|${rule.destinationId}`;
+      const cur = fareIndex.get(key);
+      if (cur === undefined || attr.price < cur) fareIndex.set(key, attr.price);
+    } else if (!hasO && !hasD) {
+      if (flatFare === null || attr.price < flatFare) flatFare = attr.price;
+    } else {
+      partialRules.push(rule);
+    }
+  }
+  // fare_rules が無い（fare_attributes だけの均一運賃）場合のフォールバック
+  if (fareRules.length === 0) {
+    for (const a of Object.values(fareAttributes)) {
+      if (Number.isFinite(a.price) && (flatFare === null || a.price < flatFare)) flatFare = a.price;
+    }
+  }
+
   const routes = {};
   for (const r of routesRaw) {
     routes[r.route_id] = r.route_short_name || r.route_long_name || r.route_id;
@@ -123,5 +155,5 @@ export function parseGtfsTables(tables) {
 
   const agencyName = agencyRaw[0]?.agency_name || '';
 
-  return { stops, fareAttributes, fareRules, routes, agencyName };
+  return { stops, fareAttributes, fareRules, fareIndex, partialRules, flatFare, routes, agencyName };
 }

@@ -23,34 +23,34 @@ export function walkMinutes(meters) {
 }
 
 // --- 運賃検索：乗車停留所 origin → 降車停留所 dest の運賃（円） ----------------
-// 見つからなければ null。複数該当する場合は最安を返す。
+// 見つからなければ null。起動時に作った索引（fareIndex）で O(1) に引く。
 export function lookupFare(origin, dest, gtfs) {
-  const { fareRules, fareAttributes } = gtfs;
+  const { fareIndex, partialRules, flatFare, fareAttributes } = gtfs;
+
+  // 区間制（origin×destination 指定）の最安運賃
+  if (fareIndex) {
+    const price = fareIndex.get(`${origin.zone}|${dest.zone}`);
+    if (price !== undefined) return price;
+  }
+
+  // 一方のみ指定 / contains_id 方式の稀なルールをフォールバック走査
   let best = null;
-
-  for (const rule of fareRules) {
-    // origin / destination が指定されている場合は zone_id と一致が条件。
-    // 空欄（フラット運賃）の場合は無条件で一致とみなす。
-    if (rule.originId && rule.originId !== origin.zone) continue;
-    if (rule.destinationId && rule.destinationId !== dest.zone) continue;
-
-    const attr = fareAttributes[rule.fareId];
-    if (!attr || !Number.isFinite(attr.price)) continue;
-
-    if (best === null || attr.price < best.price) {
-      best = { price: attr.price, fareId: rule.fareId, rule };
+  if (partialRules && partialRules.length) {
+    for (const rule of partialRules) {
+      if (rule.originId && rule.originId !== origin.zone) continue;
+      if (rule.destinationId && rule.destinationId !== dest.zone) continue;
+      if (rule.containsId && rule.containsId !== origin.zone && rule.containsId !== dest.zone) continue;
+      const attr = fareAttributes[rule.fareId];
+      if (!attr || !Number.isFinite(attr.price)) continue;
+      if (best === null || attr.price < best) best = attr.price;
     }
   }
+  if (best !== null) return best;
 
-  // fare_rules が一切無い（fare_attributes だけの全線均一運賃）場合のフォールバック
-  if (best === null && fareRules.length === 0) {
-    const prices = Object.values(fareAttributes)
-      .map((a) => a.price)
-      .filter((p) => Number.isFinite(p));
-    if (prices.length) best = { price: Math.min(...prices), fareId: null, rule: null };
-  }
+  // 均一運賃のフォールバック
+  if (flatFare !== null && flatFare !== undefined) return flatFare;
 
-  return best ? best.price : null;
+  return null;
 }
 
 // --- 近隣の停留所（徒歩圏内）を距離順に返す ------------------------------------
